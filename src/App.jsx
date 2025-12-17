@@ -129,7 +129,7 @@ const AdminPortal = () => {
   };
 
   const VALVE_TYPES = [
-    "mistral",
+    "mitral",
     "Arotic",
   ];
 
