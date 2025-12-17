@@ -1,12 +1,49 @@
 import React, { useState, useEffect } from 'react';
 import { Users, UserPlus, FileText, Activity, LogOut, Menu, X, Stethoscope, Calendar, Plus, AlertCircle } from 'lucide-react';
 
-// API Configuration
-const API_BASE_URL = 'http://localhost:8080';
+// ==================== API CONFIGURATION ====================
+const API_CONFIG = {
+  // Master switch - set to false to disable all API calls
+  isOnline: true,
+  
+  // Base URL for API
+  baseUrl: 'http://localhost:8080',
+  
+  // Individual endpoint toggles
+  endpoints: {
+    login: true,              // POST /auth/login
+    fetchDoctors: true,       // GET /admin/doctors
+    createDoctor: true,       // POST /admin/create-doctor
+    fetchPatients: true,      // GET /doctor/patients/{doctorId}
+    createPatient: true,      // POST /doctor/create-patient
+    fetchRecords: true,       // GET /doctor/records/{patientId}
+    addRecord: true,          // POST /doctor/add-record
+  }
+};
+
+// Mock data for offline mode
+const MOCK_DATA = {
+  users: [
+    { email: 'admin@hospital.com', password: 'admin123', role: 'ADMIN', name: 'Admin User', userId: '1' },
+    { email: 'doctor@hospital.com', password: 'doctor123', role: 'DOCTOR', name: 'Dr. Sarah Johnson', userId: '2', doctorProfileId: '1' }
+  ],
+  doctors: [
+    { id: '1', fullName: 'Dr. Sarah Johnson', specialty: 'Cardiology', phoneNumber: '+1 555-0101', clinicAddress: '123 Medical Plaza', email: 'doctor@hospital.com' },
+    { id: '2', fullName: 'Dr. Michael Chen', specialty: 'Pediatrics', phoneNumber: '+1 555-0102', clinicAddress: '456 Health Center' }
+  ],
+  patients: [
+    { id: '1', fullName: 'John Smith', gender: 'Male', phoneNumber: '+1 555-0201', address: '789 Oak Street', email: 'john@email.com' },
+    { id: '2', fullName: 'Emma Wilson', gender: 'Female', phoneNumber: '+1 555-0202', address: '321 Pine Avenue', email: 'emma@email.com' }
+  ],
+  records: [
+    { id: '1', patientId: '1', inr: 2.5, dose: 5.00, notes: 'Monitor blood pressure weekly', recordDate: '2024-12-01', patient: { fullName: 'John Smith' } },
+    { id: '2', patientId: '2', inr: 3.2, dose: 4.00, notes: 'Follow-up in 3 months', recordDate: '2024-12-10', patient: { fullName: 'Emma Wilson' } }
+  ]
+};
 
 const AdminPortal = () => {
   const [currentUser, setCurrentUser] = useState(null);
-  const [credentials, setCredentials] = useState(null); // Store credentials for authentication
+  const [credentials, setCredentials] = useState(null);
   const [currentView, setCurrentView] = useState('login');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [doctors, setDoctors] = useState([]);
@@ -16,6 +53,8 @@ const AdminPortal = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+  const [dob, setDob] = useState("");
+
 
   // Auto-dismiss alerts
   useEffect(() => {
@@ -35,12 +74,32 @@ const AdminPortal = () => {
     }
   }, [currentUser]);
 
+  useEffect(() => {
+  if (
+    currentView === "patients" &&
+    currentUser?.role === "DOCTOR"
+  ) {
+    const doctorId = localStorage.getItem("userId");
+    if (doctorId) {
+      fetchPatients(doctorId);
+    }
+  }
+}, [currentView]);
+
   // Fetch patients when doctor logs in
   useEffect(() => {
     if (currentUser?.role === 'DOCTOR' && currentUser?.doctorProfileId) {
-      fetchPatients(localStorage.getItem("userId"));
+      const userId = localStorage.getItem("userId");
+      if (userId) {
+        fetchPatients(userId);
+      }
     }
-  }, [currentUser]);
+  }, [currentUser?.role, currentUser?.doctorProfileId]);
+
+  // Helper function to check if endpoint is enabled
+  const isEndpointEnabled = (endpoint) => {
+    return API_CONFIG.isOnline && API_CONFIG.endpoints[endpoint];
+  };
 
   // Helper function to create auth headers
   const getAuthHeaders = () => {
@@ -53,9 +112,30 @@ const AdminPortal = () => {
     };
   };
 
+  const calculateAge = (dob) => {
+  if (!dob) return "";
+  const birthDate = new Date(dob);
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDiff = today.getMonth() - birthDate.getMonth();
+
+    if (
+      monthDiff < 0 ||
+      (monthDiff === 0 && today.getDate() < birthDate.getDate())
+    ) {
+      age--;
+    }
+    return age;
+  };
+
+  const VALVE_TYPES = [
+    "mistral",
+    "Arotic",
+  ];
+
+
   // ========== API CALLS ==========
 
-  // Login - /auth/login
   // Login - /auth/login
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -65,35 +145,58 @@ const AdminPortal = () => {
     const email = e.target.email.value;
     const password = e.target.password.value;
 
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('login')) {
+      setTimeout(() => {
+        const mockUser = MOCK_DATA.users.find(u => u.email === email && u.password === password);
+        
+        if (mockUser) {
+          const creds = { email, password };
+          setCredentials(creds);
+          localStorage.setItem("userId", mockUser.userId);
+          
+          setCurrentUser({
+            email: mockUser.email,
+            role: mockUser.role,
+            name: mockUser.name,
+            doctorProfileId: mockUser.doctorProfileId
+          });
+          
+          setCurrentView("dashboard");
+          setSuccess("Login successful! (OFFLINE MODE)");
+        } else {
+          setError("Invalid credentials (OFFLINE MODE)");
+        }
+        setLoading(false);
+      }, 500);
+      return;
+    }
+
     try {
-      // Send login request
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+      // ONLINE MODE
+      const response = await fetch(`${API_CONFIG.baseUrl}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
-      const result = await response.json(); // << important
+      const result = await response.json();
 
       if (response.ok && result.msg === "Login successful") {
-        // Store credentials (for Basic Auth)
         const creds = { email, password };
         setCredentials(creds);
         localStorage.setItem("userId", result.userId)
 
-        // Detect user role (via separate call or map)
-        let role = "UNKNOWN";
+        let role = result.role;
 
-        // TRY GET ROLE (call /auth/me or get user details if needed)
-        // Since your backend does not return a role yet, we use fallback mapping
-        if (email.includes("admin")) role = "ADMIN";
-        else role = "DOCTOR"; // until better role endpoint exists
+        if (role.includes("ADMIN")) role = "ADMIN";
+        else if(role.includes("PATIENT")) role = "PATIENT";
+        else role = "DOCTOR"
 
-        // If doctor → fetch doctor profile
         if (role === "DOCTOR") {
           const basicAuth = btoa(`${email}:${password}`);
 
-          const doctorsRes = await fetch(`${API_BASE_URL}/admin/doctors`, {
+          const doctorsRes = await fetch(`${API_CONFIG.baseUrl}/admin/doctors`, {
             headers: { Authorization: `Basic ${basicAuth}` },
           });
 
@@ -134,9 +237,18 @@ const AdminPortal = () => {
 
   // Fetch all doctors - /admin/doctors
   const fetchDoctors = async () => {
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('fetchDoctors')) {
+      setTimeout(() => {
+        setDoctors(MOCK_DATA.doctors);
+        setLoading(false);
+      }, 300);
+      return;
+    }
+
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/admin/doctors`, {
+      const response = await fetch(`${API_CONFIG.baseUrl}/admin/doctors`, {
         headers: getAuthHeaders()
       });
       
@@ -163,6 +275,28 @@ const AdminPortal = () => {
     setLoading(true);
     
     const formData = new FormData(e.target);
+    
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('createDoctor')) {
+      setTimeout(() => {
+        const newDoctor = {
+          id: String(MOCK_DATA.doctors.length + 1),
+          fullName: formData.get('fullName'),
+          specialty: formData.get('specialty'),
+          phoneNumber: formData.get('phone'),
+          clinicAddress: formData.get('clinicAddress'),
+          email: formData.get('email')
+        };
+        MOCK_DATA.doctors.push(newDoctor);
+        setSuccess('Doctor created successfully! (OFFLINE MODE)');
+        e.target.reset();
+        setDoctors([...MOCK_DATA.doctors]);
+        setCurrentView('doctors');
+        setLoading(false);
+      }, 500);
+      return;
+    }
+
     const params = new URLSearchParams({
       email: formData.get('email'),
       password: formData.get('password'),
@@ -173,7 +307,7 @@ const AdminPortal = () => {
     });
 
     try {
-      const response = await fetch(`${API_BASE_URL}/admin/create-doctor?${params}`, {
+      const response = await fetch(`${API_CONFIG.baseUrl}/admin/create-doctor?${params}`, {
         method: 'POST',
         headers: getAuthHeaders()
       });
@@ -200,9 +334,18 @@ const AdminPortal = () => {
 
   // Fetch patients for a doctor - /doctor/patients/{doctorId}
   const fetchPatients = async (doctorId) => {
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('fetchPatients')) {
+      setTimeout(() => {
+        setPatients(MOCK_DATA.patients);
+        setLoading(false);
+      }, 300);
+      return;
+    }
+
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/doctor/patients/${doctorId}`, {
+      const response = await fetch(`${API_CONFIG.baseUrl}/doctor/patients/${doctorId}`, {
         headers: getAuthHeaders()
       });
       
@@ -229,6 +372,28 @@ const AdminPortal = () => {
     setLoading(true);
     
     const formData = new FormData(e.target);
+    
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('createPatient')) {
+      setTimeout(() => {
+        const newPatient = {
+          id: String(MOCK_DATA.patients.length + 1),
+          fullName: formData.get('fullName'),
+          gender: formData.get('gender'),
+          phoneNumber: formData.get('phone'),
+          address: formData.get('address'),
+          email: formData.get('email')
+        };
+        MOCK_DATA.patients.push(newPatient);
+        setSuccess('Patient created successfully! (OFFLINE MODE)');
+        e.target.reset();
+        setPatients([...MOCK_DATA.patients]);
+        setCurrentView('patients');
+        setLoading(false);
+      }, 500);
+      return;
+    }
+
     const params = new URLSearchParams({
       email: formData.get('email'),
       password: formData.get('password'),
@@ -236,11 +401,13 @@ const AdminPortal = () => {
       gender: formData.get('gender'),
       phone: formData.get('phone'),
       address: formData.get('address'),
-      doctorId: localStorage.getItem("userId")
+      doctorId: localStorage.getItem("userId"),
+      dob: formData.get("dob"),
+      valveType: formData.get("valveType"),
     });
 
     try {
-      const response = await fetch(`${API_BASE_URL}/doctor/create-patient?${params}`, {
+      const response = await fetch(`${API_CONFIG.baseUrl}/doctor/create-patient?${params}`, {
         method: 'POST',
         headers: getAuthHeaders()
       });
@@ -267,9 +434,19 @@ const AdminPortal = () => {
 
   // Fetch records for a patient - /doctor/records/{patientId}
   const fetchRecords = async (patientId) => {
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('fetchRecords')) {
+      setTimeout(() => {
+        const patientRecords = MOCK_DATA.records.filter(r => r.patientId === patientId);
+        setRecords(patientRecords);
+        setLoading(false);
+      }, 300);
+      return;
+    }
+
     try {
       setLoading(true);
-      const response = await fetch(`${API_BASE_URL}/doctor/records/${patientId}`, {
+      const response = await fetch(`${API_CONFIG.baseUrl}/doctor/records/${patientId}`, {
         headers: getAuthHeaders()
       });
       
@@ -296,16 +473,40 @@ const AdminPortal = () => {
     setLoading(true);
     
     const formData = new FormData(e.target);
+    
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('addRecord')) {
+      setTimeout(() => {
+        const newRecord = {
+          id: String(MOCK_DATA.records.length + 1),
+          inr: selectedPatient.id,
+          dose: formData.get('inr'),
+          treatment: formData.get('dose'),
+          notes: formData.get('notes') || '',
+          recordDate: new Date().toISOString().split('T')[0],
+          patient: { fullName: selectedPatient.fullName }
+        };
+        MOCK_DATA.records.push(newRecord);
+        setSuccess('Record added successfully! (OFFLINE MODE)');
+        e.target.reset();
+        const patientRecords = MOCK_DATA.records.filter(r => r.patientId === selectedPatient.id);
+        setRecords(patientRecords);
+        setCurrentView('records');
+        setLoading(false);
+      }, 500);
+      return;
+    }
+
     const params = new URLSearchParams({
       patientId: selectedPatient.id,
-      doctorId: currentUser.doctorProfileId,
-      diagnosis: formData.get('diagnosis'),
-      treatment: formData.get('treatment'),
+      doctorId: localStorage.getItem("userId"),
+      inr: formData.get('inr'),
+      dose: formData.get('dose'),
       notes: formData.get('notes') || ''
     });
 
     try {
-      const response = await fetch(`${API_BASE_URL}/doctor/add-record?${params}`, {
+      const response = await fetch(`${API_CONFIG.baseUrl}/doctor/add-record?${params}`, {
         method: 'POST',
         headers: getAuthHeaders()
       });
@@ -332,11 +533,21 @@ const AdminPortal = () => {
 
   // View all records for doctor
   const handleViewAllRecords = async () => {
+    // OFFLINE MODE or endpoint disabled
+    if (!isEndpointEnabled('fetchRecords')) {
+      setTimeout(() => {
+        setRecords(MOCK_DATA.records);
+        setCurrentView('records');
+        setLoading(false);
+      }, 300);
+      return;
+    }
+
     try {
       setLoading(true);
       const allRecords = [];
       for (const patient of patients) {
-        const response = await fetch(`${API_BASE_URL}/doctor/records/${patient.id}`, {
+        const response = await fetch(`${API_CONFIG.baseUrl}/doctor/records/${patient.id}`, {
           headers: getAuthHeaders()
         });
         if (response.ok) {
@@ -422,6 +633,38 @@ const AdminPortal = () => {
           <div className="mt-6 p-4 bg-blue-50 rounded-lg">
             <p className="text-sm text-gray-700 mb-2"><strong>Using Basic Authentication</strong></p>
             <p className="text-xs text-gray-600">All requests are authenticated with your credentials</p>
+          </div>
+          
+          {/* API Configuration Status */}
+          <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold text-gray-700">API Configuration</p>
+              <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+                API_CONFIG.isOnline ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}>
+                {API_CONFIG.isOnline ? 'ONLINE' : 'OFFLINE'}
+              </span>
+            </div>
+            <div className="text-xs text-gray-600 space-y-1">
+              <p><strong>Base URL:</strong> {API_CONFIG.baseUrl}</p>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-blue-600 hover:text-blue-800 font-semibold">
+                  Endpoint Status
+                </summary>
+                <div className="mt-2 pl-4 space-y-1">
+                  {Object.entries(API_CONFIG.endpoints).map(([key, value]) => (
+                    <div key={key} className="flex items-center justify-between">
+                      <span className="text-gray-600">{key}</span>
+                      <span className={`px-2 py-0.5 rounded text-xs ${
+                        value && API_CONFIG.isOnline ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {value && API_CONFIG.isOnline ? '✓' : '✗'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            </div>
           </div>
         </div>
       </div>
@@ -745,84 +988,83 @@ const AdminPortal = () => {
   );
 
   // Patients List (Doctor)
-  const PatientsList = () => (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold text-gray-800">My Patients</h1>
-        <button
-          onClick={() => setCurrentView('create-patient')}
-          className="flex items-center gap-2 bg-gradient-to-r from-green-600 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:shadow-lg transition-all"
-        >
-          <Plus size={20} />
-          Add Patient
-        </button>
-      </div>
-      
-      {loading ? (
-        <div className="text-center py-12">
-          <div className="animate-spin w-12 h-12 border-4 border-green-600 border-t-transparent rounded-full mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading patients...</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {patients.map(patient => (
-            <div key={patient.id} className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-all">
-              <div className="flex items-center gap-4 mb-4">
-                <div className="bg-gradient-to-r from-green-500 to-blue-500 w-16 h-16 rounded-full flex items-center justify-center text-white font-bold text-xl">
-                  {patient.fullName?.charAt(0) || 'P'}
-                </div>
-                <div>
-                  <h3 className="font-bold text-lg text-gray-800">{patient.fullName}</h3>
-                  <p className="text-sm text-gray-600">{patient.gender}</p>
-                </div>
-              </div>
-              <div className="space-y-2 text-sm text-gray-600">
-                <p><strong>Phone:</strong> {patient.phoneNumber}</p>
-                <p><strong>Address:</strong> {patient.address}</p>
-                <div className="mt-4 pt-4 border-t border-gray-200">
-                  <span className="text-green-600 font-semibold">Patient ID: {patient.id}</span>
-                </div>
-              </div>
-              <div className="flex gap-2 mt-4">
-                <button
-                  onClick={() => {
-                    setSelectedPatient(patient);
-                    setCurrentView('add-record');
-                  }}
-                  className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-all"
-                >
-                  Add Record
-                </button>
-                <button
-                  onClick={async () => {
-                    await fetchRecords(patient.id);
-                    setSelectedPatient(patient);
-                    setCurrentView('patient-records');
-                  }}
-                  className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition-all"
-                >
-                  View Records
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      
-      {!loading && patients.length === 0 && (
-        <div className="text-center py-12 text-gray-500">
-          <Users size={64} className="mx-auto mb-4 opacity-50" />
-          <p className="text-lg">No patients assigned yet</p>
+  const PatientsList = () => {
+    return (
+      <div>
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-3xl font-bold text-gray-800">My Patients</h1>
           <button
-            onClick={() => setCurrentView('create-patient')}
-            className="mt-4 bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700"
+            onClick={() => setCurrentView("create-patient")}
+            className="flex items-center gap-2 bg-gradient-to-r from-green-600 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:shadow-lg transition-all"
           >
-            Add First Patient
+            <Plus size={20} />
+            Add Patient
           </button>
         </div>
-      )}
-    </div>
-  );
+  
+        {loading ? (
+          <div className="text-center py-12">
+            <div className="animate-spin w-12 h-12 border-4 border-green-600 border-t-transparent rounded-full mx-auto"></div>
+            <p className="mt-4 text-gray-600">Loading patients...</p>
+          </div>
+        ) : patients.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {patients.map((patient) => (
+              <div key={patient.id} className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-all">
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="bg-gradient-to-r from-green-500 to-blue-500 w-16 h-16 rounded-full flex items-center justify-center text-white font-bold text-xl">
+                    {patient.fullName?.charAt(0) || "P"}
+                  </div>
+                  <div>
+                    <h2 className="font-bold text-lg text-gray-800">{patient.fullName}</h2>
+                    <p className="text-sm text-gray-600">{patient.gender}</p>
+                  </div>
+                </div>
+                <div className="space-y-2 text-sm text-gray-600">
+                  <p><strong>Valve Type : {patient.valveType }</strong></p>
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <span className="text-green-600 font-semibold">Patient ID: {patient.id}</span>
+                  </div>
+                </div>
+                <div className="flex gap-2 mt-4">
+                  <button
+                    onClick={() => {
+                      setSelectedPatient(patient);
+                      setCurrentView("add-record");
+                    }}
+                    className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-all"
+                  >
+                    Add Record
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await fetchRecords(patient.id);
+                      setSelectedPatient(patient);
+                      setCurrentView("patient-records");
+                    }}
+                    className="flex-1 bg-purple-600 text-white py-2 rounded-lg hover:bg-purple-700 transition-all"
+                  >
+                    View Records
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-12 text-gray-500">
+            <Users size={64} className="mx-auto mb-4 opacity-50" />
+            <p className="text-lg">No patients assigned yet</p>
+            <button
+              onClick={() => setCurrentView("create-patient")}
+              className="mt-4 bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700"
+            >
+              Add First Patient
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Create Patient Form (Doctor)
   const CreatePatientForm = () => (
@@ -877,6 +1119,46 @@ const AdminPortal = () => {
               <option value="Other">Other</option>
             </select>
           </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Date of Birth *</label>
+            <input
+              type="date"
+              name="dob"
+              value={dob}
+              onChange={(e) => setDob(e.target.value)}
+              className="w-full px-4 py-3 border rounded-lg"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Age</label>
+            <input
+              type="text"
+              value={calculateAge(dob)}
+              readOnly
+              className="w-full px-4 py-3 border rounded-lg bg-gray-100"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Valve Type *</label>
+            <select
+              name="valveType"
+              className="w-full px-4 py-3 border rounded-lg"
+              required
+            >
+              <option value="">Select Valve Type</option>
+              {VALVE_TYPES.map((valve) => (
+                <option key={valve} value={valve}>
+                  {valve}
+                </option>
+              ))}
+            </select>
+          </div>
+
+
           
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Phone *</label>
@@ -931,22 +1213,25 @@ const AdminPortal = () => {
       <form onSubmit={handleAddRecord} className="bg-white rounded-2xl shadow-lg p-8 space-y-6">
         <div className="space-y-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Diagnosis *</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Current INR</label>
             <input
-              type="text"
-              name="diagnosis"
-              placeholder="e.g., Hypertension, Type 2 Diabetes"
+              type="number"
+              name="inr"
+              placeholder="2.5"
+              step="0.01"
+              min="0"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               required
             />
           </div>
-          
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Treatment *</label>
-            <textarea
-              name="treatment"
-              rows="3"
-              placeholder="Prescribed medications, procedures, or treatment plan"
+            <label className="block text-sm font-medium text-gray-700 mb-2">Current DOSE</label>
+            <input
+              type="number"
+              name="dose"
+              step="0.01"
+              min="0"
+              placeholder="0.00 mg"
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               required
             />
@@ -1029,12 +1314,12 @@ const AdminPortal = () => {
               </div>
               <div className="space-y-3 text-gray-700">
                 <div>
-                  <strong className="text-gray-900">Diagnosis:</strong>
-                  <p className="mt-1">{record.diagnosis}</p>
+                  <strong className="text-gray-900">INR:</strong>
+                  <p className="mt-1">{record.inr}</p>
                 </div>
                 <div>
-                  <strong className="text-gray-900">Treatment:</strong>
-                  <p className="mt-1">{record.treatment}</p>
+                  <strong className="text-gray-900">DOSE:</strong>
+                  <p className="mt-1">{record.dose} mg</p>
                 </div>
                 {record.notes && (
                   <div>
